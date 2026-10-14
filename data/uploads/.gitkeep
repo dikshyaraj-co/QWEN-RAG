@@ -1,0 +1,2 @@
+# Keeps the uploads directory present on a fresh checkout.
+# Uploaded documents themselves are gitignored.

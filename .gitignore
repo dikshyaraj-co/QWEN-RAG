@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# Local data / vector store (regenerated per machine)
+data/uploads/*
+!data/uploads/.gitkeep
+chroma_db/
+
+# Generated reports / scratch output
+stress_out.txt
+stress_err.txt
+rag_stress_*
+
+# OS
+.DS_Store
+Thumbs.db

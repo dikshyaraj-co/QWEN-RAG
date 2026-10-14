@@ -1,0 +1,208 @@
+==============================================================================
+ MODEL CAPACITY REPORT — ClaimCenter RAG app (qwen3:8b via Ollama)
+ Generated: 2026-10-10
+ Purpose: Show where we are TODAY vs. the model's maximum, and what each
+          "unused" bit of capacity would cost or require to unlock.
+==============================================================================
+
+TL;DR
+-----
+We are running this model as a FAST, FACTUAL lookup assistant. We have
+deliberately turned OFF most of its "smart" capability to keep answers at ~3s.
+Roughly speaking we are using about 20-25% of what this model can do.
+The remaining ~75-80% is unused — some by CHOICE (speed trade-off), and some
+is BLOCKED by hardware (no usable GPU).
+
+
+==============================================================================
+ THE HARDWARE WE ARE RUNNING ON
+==============================================================================
+CPU            : AMD, 6 physical / 12 logical cores
+RAM            : 31.3 GB
+GPU            : AMD Radeon(TM) Graphics (INTEGRATED iGPU, gfx1103)
+                 - shares system RAM; ~512 MB dedicated VRAM
+                 - NOT usable for real acceleration (see VRAM row below)
+Inference on   : CPU ONLY  (vram = 0 GB offloaded)
+
+
+==============================================================================
+ SETTING-BY-SETTING: WHERE WE ARE vs. THE MAX
+==============================================================================
+
+1) THINKING / REASONING MODE
+   Current      : OFF         (THINK = 0 / reasoning disabled)
+   Maximum      : ON          (THINK = 1)
+   Headroom     : This is the model's #1 feature and it is fully OFF.
+   Impact if ON : Much better answers on ANALYTICAL questions (root-cause,
+                  "what's the pattern across these alerts", multi-step logic).
+   Cost if ON   : ~8x SLOWER. Warm query goes from ~3s to ~24-40s on this CPU.
+   Why we're off: We traded reasoning away for a snappy chat experience.
+   >>> This single switch is the biggest chunk of unused capability. <<<
+
+2) OUTPUT LENGTH (tokens the model may generate per answer)
+   Current      : 512 tokens        (NUM_PREDICT = 512)
+   Practical max: ~8,000+ tokens (bounded by context window, not a hard cap)
+   Headroom     : We cap answers short. Long analyses get cut off.
+   Impact if up : Longer, more complete write-ups and summaries.
+   Cost if up   : More tokens = more generation time (linear-ish).
+
+3) CONTEXT WINDOW (how much text the model can "see" at once:
+   retrieved chunks + prompt + question)
+   Current      : 8,192 tokens      (NUM_CTX = 8192)
+   Model MAX    : 40,960 tokens     (qwen3 architecture limit)
+   Headroom     : We use ~20% of the window. ~80% UNUSED.  <<<
+   Impact if up : Can feed far more document chunks per question — directly
+                  helps big tables like the Dynatrace CSV (851 rows).
+   Cost if up   : More RAM per request + slower prompt processing on CPU.
+
+4) GPU / VRAM OFFLOAD (how much of the model runs on the GPU)
+   Current      : 0 GB on GPU  -> 100% on CPU
+   For MAX speed: Need a DISCRETE GPU with ~6-8 GB free VRAM to hold the
+                  whole 8B model (Q4) on the GPU.
+   What's needed: NVIDIA GPU (CUDA, works out of the box with Ollama), OR
+                  a supported discrete AMD GPU (ROCm) with 8+ GB VRAM.
+   Why 0 today  : Our GPU is INTEGRATED. It shares CPU memory bandwidth, so
+                  even when forced on (OLLAMA_IGPU_ENABLE=1) it was SLOWER,
+                  not faster. See gpuusecasescenario.txt for the full test.
+   Headroom     : 100% of GPU acceleration is unavailable on THIS machine.
+                  Unlocking it requires DIFFERENT hardware, not a config change.
+
+5) RETRIEVAL DEPTH (how many document chunks reach the model per question)
+   Current      : TOP_K = 20 chunks
+   Reality      : The Dynatrace CSV alone is 851 chunks (one per row).
+   Headroom     : Model sees ~2% of that table per question.
+   Impact if up : More rows reach the model -> better coverage.
+   Cost if up   : Must also raise NUM_CTX to fit them; slower.
+   NOTE         : Pure counting/aggregation ("how many alerts total?") will
+                  NEVER be exact with semantic retrieval alone. That needs a
+                  pandas/tabular-query feature, not a bigger TOP_K.
+                  >>> This is the real bottleneck for your data, not the model. <<<
+
+6) TEMPERATURE (randomness / creativity of answers)
+   Current      : 0.1   (very rigid, factual, repeatable)
+   Range        : 0.0  ->  ~1.0+ (higher = more creative / varied)
+   Headroom     : We're near the "factual" end on purpose.
+   Impact if up : More natural / varied phrasing; also more hallucination risk.
+   Recommendation: Keep LOW for document Q&A. Low temp is CORRECT here.
+
+7) SPEED TUNING (already optimized)
+   KEEP_ALIVE   : 30m  (model stays in RAM between questions -> avoids reload)
+   Warm latency : ~3s per query  (about as fast as 8B gets on this CPU)
+   This part is already near-optimal for the hardware.
+
+
+==============================================================================
+ "WHERE ARE WE SITTING" — SIMPLE SCORECARD
+==============================================================================
+                         NOW            MAX / IDEAL         % USED (approx)
+Reasoning (thinking)     OFF            ON                  0%
+Output length            512 tok        ~8,000+ tok         ~6%
+Context window           8,192          40,960              20%
+GPU acceleration         0 GB (CPU)     full model on GPU   0% (blocked by HW)
+Retrieval coverage       20 / 851       all rows            ~2% of the table
+Temperature              0.1            tune to taste       (intentionally low)
+Speed tuning             optimized      optimized           ~100%
+
+Overall, as an "intelligence" ceiling: we are using roughly 20-25% of this
+model's capability and leaving ~75-80% on the table.
+
+
+==============================================================================
+ WHAT UNLOCKS WHAT (so you can decide the trade-offs)
+==============================================================================
+Want SMARTER answers (reasoning, analysis)?
+   -> THINK=1, raise NUM_PREDICT to ~2048.  Cost: 20-40s/query on this CPU.
+
+Want MORE of your documents considered per question?
+   -> raise TOP_K and NUM_CTX (up to 40,960).  Cost: more RAM + slower.
+
+Want EXACT counts/aggregation over tables (Dynatrace CSV)?
+   -> add pandas-based tabular querying (a code feature, not a knob).
+      This is the highest-value change for your current data.
+
+Want REAL speed AND reasoning at the same time?
+   -> you need a machine with a DISCRETE GPU (NVIDIA easiest, 8+ GB VRAM).
+      That is the only way to get fast AND smart together.
+
+Want a smaller/faster model instead?
+   -> OLLAMA_MODEL=qwen3:1.7b  (faster, lower quality; may fit the iGPU).
+
+
+==============================================================================
+ HOW TO CHANGE ANY OF THIS
+==============================================================================
+All knobs live in:  RAGModel\src\config.py
+Each can also be overridden at launch via an environment variable, e.g.:
+   PowerShell:
+     $env:THINK="1"; $env:NUM_PREDICT="2048"; $env:NUM_CTX="16384"
+     streamlit run app.py
+Restart the app after any change (settings are read once at startup).
+
+Current live values at time of this report:
+   MODEL=qwen3:8b  THINK=False  TEMP=0.1
+   NUM_PREDICT=512  NUM_CTX=8192  TOP_K=20  KEEP_ALIVE=30m
+   CHUNK_SIZE=1000  CHUNK_OVERLAP=150
+==============================================================================
+
+
+==============================================================================
+ CURRENT BOTTLENECKS (what is actually holding us back, worst first)
+==============================================================================
+
+BOTTLENECK #1 — RETRIEVAL COVERAGE (biggest limiter for your data)
+   The model only sees TOP_K = 20 chunks per question, but your Dynatrace
+   CSV is 851 rows/chunks. So it answers from ~2% of the table. Counting and
+   "list everything" questions cannot work because the model never sees the
+   full data. This hurts you MORE than any model setting.
+
+BOTTLENECK #2 — NO GPU ACCELERATION (hardware)
+   Inference runs 100% on CPU (vram = 0 GB). The integrated GPU cannot
+   accelerate an 8B model and was actually slower when forced on. This caps
+   warm latency at ~3s and makes "reasoning ON" very slow (~24-40s).
+   Only fixable with different hardware (discrete GPU, 8+ GB VRAM).
+
+BOTTLENECK #3 — REASONING TURNED OFF (by choice)
+   The model's strongest feature (chain-of-thought) is disabled for speed.
+   Analytical questions get shallower answers than the model is capable of.
+
+BOTTLENECK #4 — SHORT OUTPUT + MODEST CONTEXT (by choice)
+   NUM_PREDICT=512 truncates long answers; NUM_CTX=8192 uses only ~20% of the
+   40,960 the model supports, limiting how much data fits per question.
+
+
+==============================================================================
+ RECOMMENDATIONS — THE THREE PATHS
+==============================================================================
+
+PATH A — "FAST FACTUAL LOOKUP"  (what we have today)
+   Keep settings as-is: thinking OFF, ~3s answers.
+   Best for : quick, specific lookups — "what alert fired on host X?"
+   Pros     : snappy, responsive chat.
+   Cons     : shallow on analysis; weak on whole-table questions.
+   Effort   : none (current state).
+
+PATH B — "SMART ANALYST"  (unlock the model's reasoning)
+   Turn thinking ON (THINK=1), raise NUM_PREDICT (~2048), optionally raise
+   NUM_CTX. Best done as a UI TOGGLE so it's fast by default and "deep" only
+   when you ask for it.
+   Best for : analysis — "what's the root-cause pattern across these alerts?"
+   Pros     : noticeably better, deeper answers.
+   Cons     : 20-40s per answer on this CPU.
+   Effort   : small (config/UI change).
+
+PATH C — "FIX RETRIEVAL / TABULAR QUERYING"  (highest value for your data)
+   Add pandas-based querying so counting, filtering, and aggregation run over
+   ALL rows of CSV/Excel — not just the retrieved chunks.
+   Best for : "how many critical alerts?", "list all hosts", "latest alert".
+   Pros     : makes whole-table questions actually correct.
+   Cons     : a real code feature, not a knob.
+   Effort   : medium (new feature).
+
+----------------------------------------------------------------------------
+MY RECOMMENDATION (priority order):
+   1. PATH C first  — retrieval is the real bottleneck for the Dynatrace data.
+   2. PATH B next   — add a "deep analysis" toggle: fast by default, smart on
+                      demand (best of both worlds, avoids slowing every query).
+   3. PATH A stays  — remains the default mode for quick lookups.
+   (Real speed + reasoning together ultimately needs a discrete-GPU machine.)
+==============================================================================

@@ -1,0 +1,112 @@
+==============================================================================
+ GPU USE-CASE SCENARIO — Local RAG app (ClaimCenter) on this laptop
+ Written: 2026-10-10
+==============================================================================
+
+PURPOSE
+-------
+Record of what we found when we tried to run the LLM (qwen3:8b via Ollama) on
+the GPU instead of the CPU, so we don't have to rediscover this later.
+
+
+THE HARDWARE
+------------
+- GPU: AMD Radeon(TM) Graphics  -> INTEGRATED GPU (iGPU), RDNA3, gfx1103
+       (Radeon 780M class). Shares system RAM; ~512 MB "dedicated" VRAM.
+- CPU: AMD64, 6 physical / 12 logical cores.
+- RAM: ~31 GB total.
+- OS:  Windows 11.
+- Ollama model: qwen3:8b (~5.2-5.5 GB).
+
+
+THE ORIGINAL SYMPTOM
+--------------------
+During the stress test, system CPU was pinned at ~100% while the GPU sat at
+~5% utilization. The model was running ENTIRELY on CPU.
+
+Ollama /api/ps confirmed it:
+    model=qwen3:8b total=5.53GB size_in_vram=0GB      <-- 0 GB on GPU
+
+
+WHY THE GPU WAS NOT USED (straight from Ollama's server.log)
+------------------------------------------------------------
+Ollama tries the GPU automatically. It declined for three reasons, all logged:
+
+  1. "AMD driver is too old. Update your AMD driver to enable GPU inference."
+  2. "dropping ROCm device - no rocblas support for gfx target"
+         device=ROCm0  gfx_target=gfx1103
+         supported targets = gfx1030/1100/1101/1102/1150/1151/1200/1201
+         (gfx1103 — our iGPU — is NOT in the default ROCm support list)
+     hint: set HSA_OVERRIDE_GFX_VERSION to map to a supported target
+  3. "dropping integrated GPU; to enable, set OLLAMA_IGPU_ENABLE=1"
+         library=Vulkan  name="AMD Radeon (TM) Graphics"
+
+So: ROCm doesn't support this iGPU by default, and integrated GPUs are
+disabled by default even on the Vulkan backend.
+
+
+THE EXPERIMENT WE RAN
+---------------------
+Goal: enable the iGPU via the Vulkan backend and measure if it helps.
+
+Steps taken:
+  1. Recorded that OLLAMA_IGPU_ENABLE was unset (so revert = just remove it).
+  2. Set user env var:  OLLAMA_IGPU_ENABLE = 1
+  3. Stopped all ollama processes, restarted "ollama serve".
+  4. Forced a model load, then checked /api/ps.
+
+RESULT — offload DID work:
+    model=qwen3:8b total=5.19GB in_vram=5.19GB       <-- full model on iGPU!
+    (The iGPU shares system RAM, so it is NOT limited to the 512 MB
+     "dedicated" VRAM — Ollama mapped the whole model to it.)
+    server.log showed the KV cache loaded across all 36 layers via Vulkan.
+
+
+BUT — IT WAS NOT FASTER (the key finding)
+-----------------------------------------
+Warm single-query latency:
+    CPU path  : ~3.0 s   (baseline measured earlier)
+    iGPU path : ~4.0 - 4.3 s   (slightly SLOWER)
+
+WHY: LLM inference is MEMORY-BANDWIDTH-BOUND. An integrated GPU shares the
+exact same system memory and bandwidth as the CPU. Moving work from CPU cores
+to iGPU shaders doesn't help because they draw from the same memory "straw".
+A discrete GPU wins only because it has its own, much faster dedicated VRAM
+(e.g. GDDR6). This iGPU has none of that advantage.
+
+
+CONCLUSION
+----------
+- CAN we run on the GPU here?  Technically yes (OLLAMA_IGPU_ENABLE=1 works).
+- Does it help?  No. It is marginally slower and competes for shared memory.
+- DECISION: revert to the CPU path (it is the faster option on this machine).
+
+
+WHAT "SCALING" ACTUALLY REQUIRES
+--------------------------------
+For real GPU acceleration, move to hardware with a DISCRETE GPU + dedicated VRAM:
+  - NVIDIA GPU (CUDA) -> works out-of-the-box with Ollama, easiest path.
+  - Discrete AMD GPU (ROCm) with 8+ GB VRAM and a supported gfx target.
+An 8B model wants roughly 6-8 GB of VRAM to sit fully on the GPU.
+
+On THIS laptop, the only real levers are CPU-side:
+  - Smaller model (e.g. qwen3:1.7b)   -> faster, lower quality.
+  - Lower concurrency                 -> avoid request queueing.
+  - Shorter outputs (NUM_PREDICT)     -> less generation time.
+  - Keep thinking disabled (THINK=0)  -> already done; ~8x faster than with it.
+
+
+HOW TO RE-ENABLE THE iGPU LATER (if you ever want to retest)
+------------------------------------------------------------
+  PowerShell:
+    [Environment]::SetEnvironmentVariable("OLLAMA_IGPU_ENABLE","1","User")
+    # restart Ollama, then: Invoke-RestMethod http://localhost:11434/api/ps
+  Optionally also try (ROCm route, fiddly):
+    [Environment]::SetEnvironmentVariable("HSA_OVERRIDE_GFX_VERSION","11.0.0","User")
+    # and update the AMD driver first.
+
+HOW WE REVERTED (what the CPU path needs)
+-----------------------------------------
+  [Environment]::SetEnvironmentVariable("OLLAMA_IGPU_ENABLE",$null,"User")
+  # stop + restart ollama; /api/ps should then show size_in_vram=0GB again.
+==============================================================================

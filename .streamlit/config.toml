@@ -1,0 +1,27 @@
+# Streamlit theme / look-and-feel.
+# Streamlit reads this automatically on startup. Change the values and refresh
+# the browser (or restart `streamlit run app.py`) to see the effect.
+# Full reference: https://docs.streamlit.io/develop/api-reference/configuration/config.toml
+
+[theme]
+# Dark base to match the ClaimCenter design.
+base = "dark"
+
+# Blue accent: buttons, links, active widgets, user chat bubble.
+primaryColor = "#2563EB"
+
+# Main page background (near-black).
+backgroundColor = "#0D0D0F"
+
+# Sidebar + widget panels (slightly lighter than the background).
+secondaryBackgroundColor = "#161618"
+
+# Default text color (soft off-white).
+textColor = "#E5E7EB"
+
+# App font.
+font = "sans serif"
+
+[server]
+# Don't auto-open a browser tab each time (optional, personal preference).
+headless = true

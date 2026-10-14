@@ -1,0 +1,32 @@
+# ClaimCenter RAG — Python dependencies
+#
+# Versions are PINNED to the exact set verified working on Python 3.12 (Windows).
+# This guarantees a different machine installs the same, tested combination
+# rather than resolving to newer, untested versions.
+#
+# Install with:  pip install -r requirements.txt
+# (setup.ps1 does this for you inside a local .venv)
+
+# --- Core RAG ---
+langchain==1.4.4
+langchain-chroma==1.1.0
+langchain-ollama==1.1.0
+langchain-huggingface==1.2.3
+langchain-text-splitters==1.1.3
+langchain-core==1.6.9
+chromadb==1.5.9
+
+# --- Embeddings (local sentence-transformers) ---
+sentence-transformers==6.1.0
+
+# --- Document loaders (PDF / Excel; CSV + text use pandas/stdlib) ---
+pypdf==6.20.0
+pandas==3.0.6
+openpyxl==3.1.5
+
+# --- UI ---
+streamlit==1.65.0
+
+# --- Stress testing / metrics (optional dev tooling) ---
+psutil==7.2.2
+matplotlib==3.11.2
